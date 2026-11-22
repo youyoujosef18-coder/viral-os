@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+
+  --color-ink: #0e1220;
+  --color-ink-2: #121729;
+  --color-panel: #161b2e;
+  --color-raised: #1e2540;
+  --color-line: #2a3150;
+  --color-line-soft: #222842;
+  --color-fg: #eceef7;
+  --color-muted: #8d93ad;
+  --color-faint: #5d6383;
+  --color-violet: #7c5cff;
+  --color-violet-soft: #a491ff;
+  --color-cyan: #22d3ee;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+
+  --shadow-glow: 0 0 0 1px rgb(124 92 255 / 0.45), 0 0 18px -4px rgb(124 92 255 / 0.55);
+}
+
+@layer base {
+  html { color-scheme: dark; }
+  body {
+    background: var(--color-ink);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-feature-settings: "tnum" 1, "cv11" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: rgb(124 92 255 / 0.4); }
+  :focus-visible { outline: 2px solid var(--color-violet); outline-offset: 2px; border-radius: 4px; }
+  * { scrollbar-width: thin; scrollbar-color: var(--color-line) transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* Rich text editor */
+.tiptap { outline: none; min-height: 3rem; }
+.tiptap p.is-editor-empty:first-child::before { content: attr(data-placeholder); color: var(--color-faint); float: left; height: 0; pointer-events: none; }
+.tiptap ul { list-style: disc; padding-left: 1.25rem; }
+.tiptap ol { list-style: decimal; padding-left: 1.25rem; }
+
+.skeleton { background: linear-gradient(90deg, var(--color-raised) 0%, #262e4f 50%, var(--color-raised) 100%); background-size: 200% 100%; animation: shimmer 1.4s ease-in-out infinite; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
