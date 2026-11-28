@@ -89,12 +89,26 @@ function Composer({ post, projectId, onClose, onSaved }: { post: Post | null; pr
     post?.targets.filter((t) => t.connectionId).map((t) => ({ connectionId: t.connectionId!, platform: t.platform, title: t.title ?? "", caption: t.caption, hashtags: t.hashtags.map((h) => `#${h}`).join(" "), privacy: t.privacy, options: t.options, thumbnailAssetId: t.thumbnailAssetId, customCaption: !!t.caption && t.caption !== post.baseCaption })) ?? [],
   );
   const [tab, setTab] = React.useState("content");
-  const [mode, setMode] = React.useState<"draft" | "now" | "schedule">("draft");
+  // Editing a scheduled post keeps it scheduled at its saved time unless the user changes that.
+  const wasScheduled = post?.status === "scheduled" && !!post.scheduledAt;
+  const [mode, setMode] = React.useState<"draft" | "now" | "schedule">(wasScheduled ? "schedule" : "draft");
   const [tzOverride, setTimezone] = React.useState<string | null>(post?.timezone ?? null);
   const timezone = tzOverride ?? me?.timezone ?? "UTC";
   const tz = timezone;
-  const [when, setWhen] = React.useState(() => fmtTz(toZonedTime(new Date(Date.now() + 3600_000), tz), "yyyy-MM-dd'T'HH:mm", { timeZone: tz }));
-  const [reviewStatus, setReviewStatus] = React.useState<"draft" | "needs_review" | "ready">((post?.status as "draft") ?? "draft");
+  const wallTime = (d: Date, zone: string) => fmtTz(toZonedTime(d, zone), "yyyy-MM-dd'T'HH:mm", { timeZone: zone });
+  const [when, setWhenRaw] = React.useState(() => wallTime(wasScheduled ? new Date(post!.scheduledAt!) : new Date(Date.now() + 3600_000), tz));
+  const whenTouched = React.useRef(wasScheduled);
+  const setWhen = (v: string) => {
+    whenTouched.current = true;
+    setWhenRaw(v);
+  };
+  // The profile timezone can arrive after the first render; recompute the default time in it.
+  React.useEffect(() => {
+    if (!whenTouched.current) setWhenRaw(wallTime(new Date(Date.now() + 3600_000), tz));
+  }, [tz]);
+  // Only review states are editable here; a scheduled, failed or cancelled post is saved back as a draft.
+  const REVIEW_STATES = ["draft", "needs_review", "ready"] as const;
+  const [reviewStatus, setReviewStatus] = React.useState<"draft" | "needs_review" | "ready">(REVIEW_STATES.find((st) => st === post?.status) ?? "draft");
   const [errors, setErrors] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
 

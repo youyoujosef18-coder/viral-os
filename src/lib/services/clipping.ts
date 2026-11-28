@@ -19,6 +19,8 @@ import { createPost } from "./publishing";
 import { ApiError, badRequest, notFound } from "../api/errors";
 import { logger } from "../logger";
 import { createYouTubeClipJob, runYouTubeJob } from "./youtube-clips";
+import { meteredFor } from "../usage";
+import { assertOwned } from "./ownership";
 
 // ------------------------------------------------------------------ input validation
 
@@ -52,6 +54,7 @@ const STALE_MINUTES = 30;
 export async function createClipJob(userId: string, raw: unknown) {
   if (raw && typeof raw === "object" && (raw as { source?: unknown }).source === "youtube") return createYouTubeClipJob(userId, raw);
   const input = clipJobInputSchema.parse(raw);
+  await assertOwned(userId, { projects: [input.projectId] });
   const asset = await withUser(userId, async (tx) => (await tx.select().from(schema.mediaAssets).where(eq(schema.mediaAssets.id, input.assetId)))[0]);
   if (!asset) throw notFound("Source video");
   if (asset.kind !== "video") throw badRequest("Choose a video file to clip.");
@@ -158,7 +161,7 @@ export async function aiEnrich(pool: { start: number; end: number; score: number
  * Analyze a source video and create ranked clip candidates (then render them if requested).
  * Claimed atomically: concurrent workers never run the same job twice; stale claims are recoverable.
  */
-export async function runClipJob(jobId: string): Promise<"skipped" | "completed" | "failed"> {
+async function runClipJobUnmetered(jobId: string): Promise<"skipped" | "completed" | "failed"> {
   const db = serviceDb();
   const stale = sql`now() - (${STALE_MINUTES} || ' minutes')::interval`;
   const [job] = await db
@@ -271,7 +274,7 @@ export async function runClipJob(jobId: string): Promise<"skipped" | "completed"
 // ------------------------------------------------------------------ worker: rendering
 
 /** Render one clip. `localSource`/`info` let the analysis step reuse the already-downloaded source. */
-export async function renderClipRow(clipId: string, localSource?: string, info?: ProbeResult): Promise<"skipped" | "ready" | "failed"> {
+async function renderClipRowUnmetered(clipId: string, localSource?: string, info?: ProbeResult): Promise<"skipped" | "ready" | "failed"> {
   const db = serviceDb();
   const stale = sql`now() - (${STALE_MINUTES} || ' minutes')::interval`;
   const [clip] = await db
@@ -421,3 +424,11 @@ export async function reconcileClips(limit = 5) {
 
 export const SCORE_WEIGHTS_DOC = WEIGHTS;
 export type { JobRow, ClipRow };
+
+export function runClipJob(jobId: string): Promise<"skipped" | "completed" | "failed"> {
+  return meteredFor("clip_jobs", jobId, () => runClipJobUnmetered(jobId));
+}
+
+export function renderClipRow(clipId: string, localSource?: string, info?: ProbeResult): Promise<"skipped" | "ready" | "failed"> {
+  return meteredFor("clips", clipId, () => renderClipRowUnmetered(clipId, localSource, info));
+}

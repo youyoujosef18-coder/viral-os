@@ -12,6 +12,8 @@ import { logActivity } from "./activity";
 import { emitAutomationEvent } from "./automation";
 import { ApiError, badRequest, notFound } from "../api/errors";
 import { logger } from "../logger";
+import { meteredFor } from "../usage";
+import { assertOwnedIn } from "./ownership";
 
 type Target = typeof schema.postTargets.$inferSelect;
 type Status = Target["status"];
@@ -45,12 +47,21 @@ export const postInputSchema = z.object({
   projectId: z.string().uuid().nullable().optional(),
   mediaAssetId: z.string().uuid().nullable().optional(),
   thumbnailAssetId: z.string().uuid().nullable().optional(),
-  timezone: z.string().default("UTC"),
+  timezone: z.string().refine(isValidTimeZone, "Unknown timezone").default("UTC"),
   status: z.enum(["draft", "needs_review", "ready"]).default("draft"),
   targets: z.array(targetInputSchema).max(10).default([]),
 });
 
 export type PostInput = z.infer<typeof postInputSchema>;
+
+function isValidTimeZone(tz: string) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Aggregate a post's status from its targets. */
 export function aggregateStatus(statuses: Status[], fallback: Status): Status {
@@ -120,6 +131,7 @@ async function validateTargets(userId: string, input: PostInput): Promise<string
 export async function createPost(userId: string, raw: unknown) {
   const input = postInputSchema.parse(raw);
   return withUser(userId, async (tx) => {
+    await assertOwnedIn(tx, { mediaAssets: [input.mediaAssetId, input.thumbnailAssetId, ...input.targets.map((t) => t.thumbnailAssetId)], projects: [input.projectId] });
     const [post] = await tx
       .insert(schema.posts)
       .values({
@@ -168,12 +180,14 @@ async function insertTargets(tx: Parameters<Parameters<typeof withUser>[1]>[0], 
 export async function updatePost(userId: string, postId: string, raw: unknown) {
   const input = postInputSchema.parse(raw);
   return withUser(userId, async (tx) => {
-    const [post] = await tx.select().from(schema.posts).where(eq(schema.posts.id, postId));
+    const [post] = await tx.select().from(schema.posts).where(eq(schema.posts.id, postId)).for("update");
     if (!post) throw notFound("Post");
-    const targets = await tx.select().from(schema.postTargets).where(eq(schema.postTargets.postId, postId));
+    // Lock the targets so the worker can't start publishing one between this check and the rewrite.
+    const targets = await tx.select().from(schema.postTargets).where(eq(schema.postTargets.postId, postId)).for("update");
     if (targets.some((t) => !EDITABLE.includes(t.status))) {
       throw new ApiError(409, "This post is being published or is already live on a platform and can no longer be edited. Duplicate it instead.", "locked");
     }
+    await assertOwnedIn(tx, { mediaAssets: [input.mediaAssetId, input.thumbnailAssetId, ...input.targets.map((t) => t.thumbnailAssetId)], projects: [input.projectId] });
     const [updated] = await tx
       .update(schema.posts)
       .set({
@@ -366,7 +380,7 @@ async function claim(targetId: string, mode: "publish" | "poll"): Promise<Target
 
 export type ProcessResult = { outcome: "skipped" | "published" | "processing" | "retry" | "failed"; detail?: string };
 
-export async function processTarget(targetId: string, mode: "publish" | "poll" = "publish"): Promise<ProcessResult> {
+async function processTargetUnmetered(targetId: string, mode: "publish" | "poll" = "publish"): Promise<ProcessResult> {
   const t = await claim(targetId, mode);
   if (!t) return { outcome: "skipped", detail: "not due, already claimed, or in a terminal state" };
   const db = serviceDb();
@@ -517,4 +531,9 @@ export async function getPostDetail(userId: string, postId: string) {
       : [];
     return { ...post, targets: targets.map(publicTarget), events };
   });
+}
+
+/** Publish or poll one target; YouTube quota it uses is attributed to the post's owner. */
+export function processTarget(targetId: string, mode: "publish" | "poll" = "publish"): Promise<ProcessResult> {
+  return meteredFor("post_targets", targetId, () => processTargetUnmetered(targetId, mode));
 }

@@ -11,6 +11,10 @@ Everything in the codebase is implemented. These steps need your accounts, crede
 - [ ] Web deployed (Vercel) and worker deployed (Railway, `Dockerfile.worker`)
 - [ ] `npm run diagnose -- --strict` exits 0 with production variables; `GET /api/health` returns `ok: true` with a worker heartbeat
 
+## 1b. Workspace owner
+- [ ] Set `OWNER_EMAIL` to your email before signing up (or run `npm run make-owner -- you@example.com` after signing up)
+- [ ] Sign in, open **Owner console**, and choose the sign-up mode (open, invite only or closed) before sharing the link
+
 ## 2. AI
 - [ ] `AI_PROVIDER=anthropic` + `ANTHROPIC_API_KEY` (or `openai` + `OPENAI_API_KEY`)
 - [ ] Optional: `IMAGE_PROVIDER=openai` for thumbnail image generation

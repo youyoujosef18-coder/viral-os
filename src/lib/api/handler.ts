@@ -6,6 +6,7 @@ import { AuthError, requireUser, type SessionUser } from "../auth/session";
 import { env } from "../env";
 import { rateLimit } from "./rate-limit";
 import { logger } from "../logger";
+import { runAsUser } from "../usage";
 
 type Ctx<P> = { req: NextRequest; user: SessionUser; params: P };
 type Options = { rateLimit?: { limit: number; windowSeconds: number; bucket: string } };
@@ -23,6 +24,21 @@ function sameOrigin(req: NextRequest): boolean {
   }
 }
 
+/** SQLSTATE of a Postgres error, whether thrown directly or wrapped by Drizzle. */
+function pgCode(err: unknown): string | null {
+  for (let e: unknown = err, i = 0; e && i < 3; e = (e as { cause?: unknown }).cause, i++) {
+    const c = (e as { code?: unknown }).code;
+    if (typeof c === "string" && /^[0-9A-Z]{5}$/.test(c)) return c;
+  }
+  return null;
+}
+
+/** For PATCH routes: an update with no fields would be an invalid SQL statement. */
+export function requireChanges<T extends Record<string, unknown>>(body: T): T {
+  if (!Object.values(body).some((v) => v !== undefined)) throw new ApiError(400, "Send at least one field to change.", "bad_request");
+  return body;
+}
+
 export function errorResponse(err: unknown) {
   if (err instanceof ApiError) {
     return NextResponse.json({ error: { message: err.message, code: err.code, details: err.details } }, { status: err.status });
@@ -36,6 +52,12 @@ export function errorResponse(err: unknown) {
       { status: 422 },
     );
   }
+  // Postgres rejecting a client-supplied value is the client's error, not a server crash.
+  const code = pgCode(err);
+  if (code?.startsWith("22")) return NextResponse.json({ error: { message: "One of the values sent isn't valid.", code: "invalid_value" } }, { status: 400 });
+  if (code === "23503") return NextResponse.json({ error: { message: "That refers to something that doesn't exist (it may have been deleted).", code: "not_found" } }, { status: 404 });
+  if (code === "23505") return NextResponse.json({ error: { message: "That already exists.", code: "conflict" } }, { status: 409 });
+  if (code === "23502" || code === "23514") return NextResponse.json({ error: { message: "A required value is missing or out of range.", code: "invalid_value" } }, { status: 400 });
   logger.error("Unhandled API error", { err: err instanceof Error ? err.stack : String(err) });
   return NextResponse.json({ error: { message: "Internal server error", code: "internal" } }, { status: 500 });
 }
@@ -56,7 +78,12 @@ export function route<P extends Record<string, string> = Record<string, string>>
         if (!rl.ok) throw new ApiError(429, "Too many requests. Please slow down and try again shortly.", "rate_limited");
       }
       const params = (context?.params ? await context.params : {}) as P;
-      const result = await handler({ req, user, params });
+      // Record ids are UUIDs: anything else can't exist, so answer 404 instead of letting Postgres reject it.
+      for (const [k, v] of Object.entries(params)) {
+        if ((k === "id" || k.endsWith("Id")) && !UUID_RE.test(String(v))) throw new ApiError(404, "Not found", "not_found");
+      }
+      // Everything metered during this request (AI calls, YouTube quota) is attributed to this user.
+      const result = await runAsUser(user.id, () => handler({ req, user, params }));
       if (result instanceof Response) return result;
       return NextResponse.json(result ?? { ok: true });
     } catch (err) {
@@ -66,14 +93,19 @@ export function route<P extends Record<string, string> = Record<string, string>>
   };
 }
 
-export async function parseBody<S extends z.ZodType>(req: NextRequest, schema: S): Promise<z.infer<S>> {
-  let json: unknown;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Read a JSON request body; a missing or malformed body is the client's error (400), not a crash. */
+export async function readJson(req: Request): Promise<unknown> {
   try {
-    json = await req.json();
+    return await req.json();
   } catch {
     throw new ApiError(400, "Request body must be valid JSON", "bad_request");
   }
-  return schema.parse(json);
+}
+
+export async function parseBody<S extends z.ZodType>(req: NextRequest, schema: S): Promise<z.infer<S>> {
+  return schema.parse(await readJson(req));
 }
 
 /**
@@ -87,12 +119,7 @@ export function pickProvided<T extends Record<string, unknown>>(raw: unknown, pa
 }
 
 export async function parsePatch<S extends z.ZodObject>(req: NextRequest, schema: S): Promise<Partial<z.infer<S>>> {
-  let json: unknown;
-  try {
-    json = await req.json();
-  } catch {
-    throw new ApiError(400, "Request body must be valid JSON", "bad_request");
-  }
+  const json = await readJson(req);
   return pickProvided(json, schema.partial().parse(json) as Record<string, unknown>) as Partial<z.infer<S>>;
 }
 

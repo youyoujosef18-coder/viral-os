@@ -1,11 +1,18 @@
-import { route, parseBody } from "@/lib/api/handler";
+import { z } from "zod";
+import { route, parseBody, parseQuery } from "@/lib/api/handler";
 import { createPost, listPosts, postInputSchema } from "@/lib/services/publishing";
 import { logActivity } from "@/lib/services/activity";
 
+const listQuery = z.object({
+  status: z.string().max(40).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(200),
+});
+
 export const GET = route(async ({ req, user }) => {
-  const sp = req.nextUrl.searchParams;
-  const from = sp.get("from"), to = sp.get("to");
-  return listPosts(user.id, { status: sp.get("status") ?? undefined, from: from ? new Date(from) : undefined, to: to ? new Date(to) : undefined, limit: Number(sp.get("limit") ?? 200) });
+  const q = parseQuery(req, listQuery);
+  return listPosts(user.id, q);
 });
 
 export const POST = route(async ({ req, user }) => {

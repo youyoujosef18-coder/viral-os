@@ -2,6 +2,7 @@ import sharp from "sharp";
 import { z } from "zod";
 import { schema, withUser } from "../db/client";
 import { generateStructured } from "../providers/ai";
+import { assertOwned } from "./ownership";
 
 /** WCAG relative luminance contrast ratio between two hex colors. */
 export function contrastRatio(hexA: string, hexB: string) {
@@ -134,6 +135,7 @@ const conceptSchema = z.object({
 });
 
 export async function generateConcepts(userId: string, input: { title: string; topic: string; style?: string; projectId?: string | null }) {
+  await assertOwned(userId, { projects: [input.projectId] });
   const { data, provider, model } = await generateStructured(conceptSchema, {
     system: "You are a thumbnail art director. Produce ORIGINAL concepts. Never suggest misleading imagery that misrepresents the video, fake reactions to things that don't happen, or copying another creator's thumbnail. Overlay text max 5 words. Colors as hex.",
     prompt: `Video title: ${input.title}\nTopic: ${input.topic}\nStyle preference: ${input.style ?? "bold, clean, high contrast"}\nGive 4 distinct concepts with an image-generation prompt each (describe scene, subject, lighting, composition; no text in the image itself) and a title that pairs with it without repeating the overlay text.`,

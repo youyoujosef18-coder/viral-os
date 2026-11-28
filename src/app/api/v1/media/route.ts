@@ -7,10 +7,11 @@ import { ApiError, badRequest } from "@/lib/api/errors";
 export const GET = route(async ({ req, user }) => {
   const sp = req.nextUrl.searchParams;
   const kind = sp.get("kind");
-  const q = sp.get("q");
-  const folder = sp.get("folder");
-  const page = Math.max(1, Number(sp.get("page") ?? 1));
-  const pageSize = Math.min(100, Math.max(1, Number(sp.get("pageSize") ?? 40)));
+  const q = sp.get("q")?.replace(/\u0000/g, "");
+  const folder = sp.get("folder")?.replace(/\u0000/g, "");
+  const int = (v: string | null, fallback: number) => (v !== null && /^\d+$/.test(v) ? Number(v) : fallback);
+  const page = Math.max(1, int(sp.get("page"), 1));
+  const pageSize = Math.min(100, Math.max(1, int(sp.get("pageSize"), 40)));
   return withUser(user.id, async (tx) => {
     const conds = [];
     if (kind && ["video", "image", "audio", "document"].includes(kind)) conds.push(eq(schema.mediaAssets.kind, kind as "video"));
@@ -28,6 +29,7 @@ export const POST = route(
   async ({ req, user }) => {
     // Multipart bodies are parsed in memory, so this route only takes small files. The upload dialog
     // uses the streaming direct-upload flow (upload-url → PUT → complete) for everything.
+    if (!(req.headers.get("content-type") ?? "").toLowerCase().startsWith("multipart/form-data")) throw badRequest("Send the file as multipart/form-data with a \"file\" field.");
     if (Number(req.headers.get("content-length") ?? 0) > MAX_MULTIPART_BYTES) throw new ApiError(413, "Files over 100 MB must use the direct upload (the Upload dialog does this automatically).", "too_large");
     const form = await req.formData();
     const file = form.get("file");

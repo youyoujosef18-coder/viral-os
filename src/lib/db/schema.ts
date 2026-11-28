@@ -71,9 +71,74 @@ export const profiles = pgTable("profiles", {
   defaultLanguage: text("default_language").notNull().default("en"),
   dashboardLayout: jsonb("dashboard_layout").$type<string[]>(),
   preferences: jsonb("preferences").$type<Record<string, unknown>>().notNull().default({}),
+  /** "user" | "owner". Only the server (service role) can change it: see the column grants in the migrations. */
+  role: text("role").notNull().default("user"),
+  /** Set by the owner to block sign-in. */
+  disabledAt: timestamp("disabled_at", { withTimezone: true }),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
   createdAt: createdAt(),
   updatedAt: updatedAt(),
 });
+
+// --------------------------------------------------------------------- owner console (service role only)
+
+/** Workspace-wide settings, e.g. signup_mode = "open" | "invite" | "closed". */
+export const appSettings = pgTable("app_settings", {
+  key: text("key").primaryKey(),
+  value: jsonb("value").$type<unknown>().notNull(),
+  updatedBy: uuid("updated_by"),
+  updatedAt: updatedAt(),
+});
+
+export const invites = pgTable(
+  "invites",
+  {
+    id: id(),
+    /** sha256 of the invite token; the token itself is only shown once, when created. */
+    tokenHash: text("token_hash").notNull().unique(),
+    /** When set, only this email can use the invite. */
+    email: text("email"),
+    note: text("note"),
+    createdBy: uuid("created_by").notNull(),
+    createdAt: createdAt(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    usedBy: uuid("used_by"),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [index("invites_created_idx").on(t.createdAt)],
+);
+
+/** Everything the owner does in the console, including every look at a user's content. */
+export const adminAuditLog = pgTable(
+  "admin_audit_log",
+  {
+    id: id(),
+    actorId: uuid("actor_id").notNull(),
+    action: text("action").notNull(),
+    targetUserId: uuid("target_user_id"),
+    detail: jsonb("detail").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: createdAt(),
+  },
+  (t) => [index("admin_audit_created_idx").on(t.createdAt), index("admin_audit_target_idx").on(t.targetUserId, t.createdAt)],
+);
+
+/** Metered usage per user: AI calls (with tokens when the provider reports them) and YouTube API units. */
+export const usageEvents = pgTable(
+  "usage_events",
+  {
+    id: id(),
+    userId: userId(),
+    /** "ai_call" | "youtube_units" */
+    kind: text("kind").notNull(),
+    units: integer("units").notNull().default(1),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    detail: jsonb("detail").$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: createdAt(),
+  },
+  (t) => [index("usage_events_user_idx").on(t.userId, t.createdAt)],
+);
 
 /** Credentials for the LOCAL auth provider only (development / self-hosting without Supabase). */
 export const localAuthUsers = pgTable("local_auth_users", {

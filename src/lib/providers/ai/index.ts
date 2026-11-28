@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import { env } from "../../env";
 import { NotConfiguredError, ApiError } from "../../api/errors";
+import { recordUsage } from "../../usage";
 
 export type GenerateParams = { system: string; prompt: string; temperature?: number; maxTokens?: number };
 
@@ -10,10 +11,18 @@ export interface AIProvider {
   name: string;
   model: string;
   generateText(p: GenerateParams): Promise<string>;
+  /** Token counts of the most recent call, when the provider reports them. */
+  lastUsage?: { inputTokens: number | null; outputTokens: number | null } | null;
+}
+
+/** Meter one model call for the owner console's usage overview. */
+async function meterCall(ai: AIProvider) {
+  await recordUsage("ai_call", 1, { inputTokens: ai.lastUsage?.inputTokens ?? null, outputTokens: ai.lastUsage?.outputTokens ?? null, detail: { provider: ai.name, model: ai.model } });
 }
 
 class AnthropicProvider implements AIProvider {
   name = "anthropic";
+  lastUsage: AIProvider["lastUsage"] = null;
   private client: Anthropic;
   constructor(apiKey: string, public model: string) {
     this.client = new Anthropic({ apiKey });
@@ -26,12 +35,14 @@ class AnthropicProvider implements AIProvider {
       system,
       messages: [{ role: "user", content: prompt }],
     });
+    this.lastUsage = { inputTokens: msg.usage?.input_tokens ?? null, outputTokens: msg.usage?.output_tokens ?? null };
     return msg.content.map((b) => (b.type === "text" ? b.text : "")).join("");
   }
 }
 
 class OpenAIProvider implements AIProvider {
   name = "openai";
+  lastUsage: AIProvider["lastUsage"] = null;
   private client: OpenAI;
   constructor(apiKey: string, public model: string, baseURL?: string) {
     this.client = new OpenAI({ apiKey, baseURL });
@@ -45,6 +56,7 @@ class OpenAIProvider implements AIProvider {
         { role: "user", content: prompt },
       ],
     });
+    this.lastUsage = { inputTokens: res.usage?.prompt_tokens ?? null, outputTokens: res.usage?.completion_tokens ?? null };
     return res.choices[0]?.message?.content ?? "";
   }
 }
@@ -108,6 +120,7 @@ export async function generateStructured<S extends z.ZodType>(
     let text: string;
     try {
       text = await ai.generateText({ ...p, system, prompt });
+      await meterCall(ai);
     } catch (err) {
       const status = (err as { status?: number }).status;
       throw new ApiError(status === 429 ? 429 : 502, `AI provider error: ${(err as Error).message}`, "ai_provider_error");
@@ -127,6 +140,7 @@ export async function generatePlain(p: GenerateParams) {
   const ai = getAIProvider();
   try {
     const text = await ai.generateText(p);
+    await meterCall(ai);
     return { text, provider: ai.name, model: ai.model };
   } catch (err) {
     if (err instanceof ApiError) throw err;

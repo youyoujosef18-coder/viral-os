@@ -5,6 +5,7 @@ import { generateStructured } from "../providers/ai";
 import { youtubePublic, type PublicVideo } from "../providers/platforms/youtube";
 import { env } from "../env";
 import { NotConfiguredError, notFound } from "../api/errors";
+import { assertOwned } from "./ownership";
 
 const expansionSchema = z.object({
   keywords: z
@@ -25,6 +26,7 @@ const expansionSchema = z.object({
 });
 
 export async function discoverKeywords(userId: string, input: { seed: string; platform: string; language: string; listId?: string | null }) {
+  await assertOwned(userId, { keywordLists: [input.listId] });
   const { data, provider, model } = await generateStructured(expansionSchema, {
     system: "You are an SEO and YouTube search strategist. Expand a seed topic into keywords people actually type. Include long-tail and question keywords, group them into clusters, and label search intent.",
     prompt: `Seed: "${input.seed}"\nPlatform: ${input.platform}\nLanguage: ${input.language}\nReturn 25-40 keywords. difficultyEstimate is your qualitative estimate (0=easy, 100=very hard) — it will be shown labeled as an AI estimate. Do NOT provide search volume numbers.`,

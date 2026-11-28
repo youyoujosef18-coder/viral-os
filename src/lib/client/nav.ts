@@ -1,6 +1,6 @@
 import {
   LayoutDashboard, Microscope, Radar, KeyRound, Swords, Clapperboard, PenLine, ImageIcon, ScanSearch, Scissors,
-  Send, Workflow, CalendarDays, LineChart, FlaskConical, Bot, FolderOpen, Settings,
+  Send, Workflow, CalendarDays, LineChart, FlaskConical, Bot, FolderOpen, Settings, ShieldCheck,
 } from "lucide-react";
 
 export type NavItem = { href: string; label: string; icon: React.ComponentType<{ className?: string }>; description: string };
@@ -53,3 +53,6 @@ export const NAV: { group: string; items: NavItem[] }[] = [
 ];
 
 export const ALL_NAV = NAV.flatMap((g) => g.items);
+
+/** Shown only to the workspace owner. The server checks the owner role on every owner API call. */
+export const OWNER_NAV: NavItem = { href: "/admin", label: "Owner console", icon: ShieldCheck, description: "Users, sign-up, usage and access log" };

@@ -191,6 +191,38 @@ describe("token management", () => {
     expect(decryptSecret(row.refreshTokenEnc!)).toBe("refresh-456"); // Google omits refresh_token on refresh; keep the old one
   });
 
+  it("refreshes once when two jobs need a new token at the same time (rotating refresh tokens)", async () => {
+    const user = await createUser();
+    const conn = await createConnection(user.id, "tiktok", 60_000);
+    let valid = "refresh-456";
+    let n = 0;
+    mockFetch(async (c) => {
+      const used = new URLSearchParams(String(c.body)).get("refresh_token");
+      await new Promise((r) => setTimeout(r, 50));
+      if (used !== valid) return json({ error: "invalid_grant", error_description: "refresh token already used" }, 400);
+      n++;
+      valid = `refresh-rotated-${n}`;
+      return json({ access_token: `access-${n}`, refresh_token: valid, expires_in: 86400, refresh_expires_in: 31536000, open_id: "o", scope: "s" });
+    });
+    const tokens = await Promise.all([getValidAccessToken(conn), getValidAccessToken(conn), getValidAccessToken(conn)]);
+    expect(n).toBe(1);
+    expect(new Set(tokens)).toEqual(new Set(["access-1"]));
+    const [row] = await serviceDb().select().from(schema.platformConnections).where(eq(schema.platformConnections.id, conn.id));
+    expect(row.status).toBe("active");
+    expect(decryptSecret(row.refreshTokenEnc!)).toBe("refresh-rotated-1");
+  });
+
+  it("proactive refresh window renews a token that is valid but expiring within it", async () => {
+    const user = await createUser();
+    const conn = await createConnection(user.id, "youtube", 3 * 3600_000);
+    let n = 0;
+    mockFetch(() => (n++, json({ access_token: "renewed", expires_in: 3600, scope: "a" })));
+    expect(await getValidAccessToken(conn)).toBe("access-123");
+    expect(n).toBe(0);
+    expect(await getValidAccessToken(conn, { refreshWithinMs: 24 * 3600_000 })).toBe("renewed");
+    expect(n).toBe(1);
+  });
+
   it("marks the connection for re-auth on invalid_grant and notifies the user", async () => {
     const user = await createUser();
     const conn = await createConnection(user.id, "youtube", -1000);

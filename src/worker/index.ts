@@ -84,8 +84,7 @@ async function refreshExpiringTokens() {
   const conns = await serviceDb().select().from(schema.platformConnections).where(and(eq(schema.platformConnections.status, "active"), isNotNull(schema.platformConnections.tokenExpiresAt), lt(schema.platformConnections.tokenExpiresAt, soon)));
   for (const c of conns) {
     try {
-      // Force refresh by treating the token as expiring now.
-      await getValidAccessToken({ ...c, tokenExpiresAt: new Date() });
+      await getValidAccessToken(c, { refreshWithinMs: 24 * 3600_000 });
     } catch (err) {
       logger.warn("token refresh failed", { connectionId: c.id, err: (err as Error).message });
     }

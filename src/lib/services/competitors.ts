@@ -5,6 +5,7 @@ import { youtubePublic } from "../providers/platforms/youtube";
 import { env } from "../env";
 import { ApiError, NotConfiguredError, notFound } from "../api/errors";
 import { generateStructured } from "../providers/ai";
+import { meteredAs } from "../usage";
 
 export async function addCompetitor(userId: string, input: { platform: "youtube" | "tiktok" | "instagram"; identifier: string; name?: string }) {
   if (input.platform !== "youtube") {
@@ -32,7 +33,7 @@ export async function addCompetitor(userId: string, input: { platform: "youtube"
   return row;
 }
 
-export async function refreshCompetitor(userId: string, competitorId: string) {
+async function refreshCompetitorUnmetered(userId: string, competitorId: string) {
   const comp = await withUser(userId, async (tx) => (await tx.select().from(schema.competitors).where(eq(schema.competitors.id, competitorId)))[0]);
   if (!comp) throw notFound("Competitor");
   if (comp.platform !== "youtube") throw new ApiError(400, "Automatic refresh is only available for YouTube competitors (official public data API).", "unsupported");
@@ -123,4 +124,8 @@ export async function listCompetitors(userId: string) {
       return { ...c, stats: computeCompetitorStats(mine), contentCount: mine.length };
     });
   });
+}
+
+export function refreshCompetitor(userId: string, competitorId: string) {
+  return meteredAs(userId, () => refreshCompetitorUnmetered(userId, competitorId));
 }

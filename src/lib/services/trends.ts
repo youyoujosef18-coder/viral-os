@@ -7,6 +7,7 @@ import { NotConfiguredError, notFound } from "../api/errors";
 import { notify } from "./notifications";
 import { emitAutomationEvent } from "./automation";
 import { generateStructured } from "../providers/ai";
+import { meteredAs } from "../usage";
 
 export const TREND_SOURCE = "youtube_most_popular";
 
@@ -67,7 +68,7 @@ export function estimateExpiry(history: { at: string; views: number }[], publish
   return new Date(Date.now() + Math.min(hoursLeft, 14 * 24) * 3600_000);
 }
 
-export async function refreshTrends(userId: string, region: string, categoryId?: string) {
+async function refreshTrendsUnmetered(userId: string, region: string, categoryId?: string) {
   if (!env().YOUTUBE_API_KEY) throw new NotConfiguredError("YouTube Data API key", "Set YOUTUBE_API_KEY (Google Cloud Console → APIs & Services → Credentials) to load trending data.");
   const videos = await youtubePublic.mostPopular(region, categoryId, 50);
   const now = new Date();
@@ -157,4 +158,8 @@ Explain briefly why this may be resonating (label as interpretation), then give 
     tx.insert(schema.ideas).values(data.ideas.map((i) => ({ userId, title: i.title, angle: `${i.angle}\n\nWhy now: ${i.whyNow}`, format: i.format, sourceType: "trend", sourceRef: trend.id, scoreSource: "ai_estimate" as const }))).returning(),
   );
   return { interpretation: data.interpretation, ideas: inserted, provider, model };
+}
+
+export function refreshTrends(userId: string, region: string, categoryId?: string) {
+  return meteredAs(userId, () => refreshTrendsUnmetered(userId, region, categoryId));
 }

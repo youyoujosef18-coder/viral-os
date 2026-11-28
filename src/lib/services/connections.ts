@@ -1,5 +1,5 @@
 import { and, eq } from "drizzle-orm";
-import { serviceDb, schema, type Executor } from "../db/client";
+import { serviceDb, schema } from "../db/client";
 import { decryptSecret, encryptSecret } from "../crypto";
 import { getAdapter } from "../providers/platforms";
 import { ProviderError } from "../providers/http";
@@ -72,36 +72,59 @@ export async function markConnectionError(connectionId: string, err: unknown) {
   }
 }
 
-/** Refresh 5 minutes before expiry. Returns a usable access token or throws ProviderError(reauth). */
-export async function getValidAccessToken(connection: ConnectionRow, db: Executor = serviceDb()): Promise<string> {
-  if (connection.status === "revoked") throw new ProviderError("Connection was disconnected", { reauth: true, userAction: true });
-  const current: TokenSet = {
-    accessToken: decryptSecret(connection.accessTokenEnc),
-    refreshToken: connection.refreshTokenEnc ? decryptSecret(connection.refreshTokenEnc) : undefined,
-    expiresAt: connection.tokenExpiresAt ?? undefined,
-    scopes: connection.scopes,
-  };
-  const expiresSoon = current.expiresAt && current.expiresAt.getTime() - Date.now() < 5 * 60_000;
-  if (!expiresSoon) return current.accessToken;
+const DEFAULT_REFRESH_WINDOW_MS = 5 * 60_000;
 
-  const adapter = getAdapter(connection.platform);
-  const refreshable = connection.platform === "instagram" ? current.accessToken : current.refreshToken;
-  if (!refreshable) throw new ProviderError("Access token expired and no refresh token is available. Reconnect the account.", { reauth: true });
+function tokensOf(row: ConnectionRow): TokenSet {
+  return {
+    accessToken: decryptSecret(row.accessTokenEnc),
+    refreshToken: row.refreshTokenEnc ? decryptSecret(row.refreshTokenEnc) : undefined,
+    expiresAt: row.tokenExpiresAt ?? undefined,
+    scopes: row.scopes,
+  };
+}
+
+function expiresWithin(row: ConnectionRow, windowMs: number) {
+  return !!row.tokenExpiresAt && row.tokenExpiresAt.getTime() - Date.now() < windowMs;
+}
+
+/**
+ * Returns a usable access token, refreshing it when it expires within `refreshWithinMs`
+ * (default 5 minutes). Throws ProviderError(reauth) when the account must be reconnected.
+ *
+ * The refresh runs under a row lock and re-reads the stored tokens first, so two jobs
+ * refreshing the same account at once cannot both spend the same refresh token
+ * (TikTok rotates refresh tokens; the second use would fail and force a reconnect).
+ */
+export async function getValidAccessToken(connection: ConnectionRow, opts: { refreshWithinMs?: number } = {}): Promise<string> {
+  if (connection.status === "revoked") throw new ProviderError("Connection was disconnected", { reauth: true, userAction: true });
+  const windowMs = opts.refreshWithinMs ?? DEFAULT_REFRESH_WINDOW_MS;
+  if (!expiresWithin(connection, windowMs)) return decryptSecret(connection.accessTokenEnc);
+
   try {
-    const next = await adapter.refresh(refreshable, current);
-    await db
-      .update(schema.platformConnections)
-      .set({
-        accessTokenEnc: encryptSecret(next.accessToken),
-        refreshTokenEnc: next.refreshToken ? encryptSecret(next.refreshToken) : connection.refreshTokenEnc,
-        tokenExpiresAt: next.expiresAt ?? null,
-        refreshTokenExpiresAt: next.refreshExpiresAt ?? connection.refreshTokenExpiresAt,
-        status: "active",
-        lastError: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.platformConnections.id, connection.id));
-    return next.accessToken;
+    return await serviceDb().transaction(async (tx) => {
+      const [fresh] = await tx.select().from(schema.platformConnections).where(eq(schema.platformConnections.id, connection.id)).for("update");
+      if (!fresh || fresh.status === "revoked") throw new ProviderError("Connection was disconnected", { reauth: true, userAction: true });
+      // Another job may have refreshed while we waited for the lock.
+      if (!expiresWithin(fresh, windowMs)) return decryptSecret(fresh.accessTokenEnc);
+
+      const current = tokensOf(fresh);
+      const refreshable = fresh.platform === "instagram" ? current.accessToken : current.refreshToken;
+      if (!refreshable) throw new ProviderError("Access token expired and no refresh token is available. Reconnect the account.", { reauth: true });
+      const next = await getAdapter(fresh.platform).refresh(refreshable, current);
+      await tx
+        .update(schema.platformConnections)
+        .set({
+          accessTokenEnc: encryptSecret(next.accessToken),
+          refreshTokenEnc: next.refreshToken ? encryptSecret(next.refreshToken) : fresh.refreshTokenEnc,
+          tokenExpiresAt: next.expiresAt ?? null,
+          refreshTokenExpiresAt: next.refreshExpiresAt ?? fresh.refreshTokenExpiresAt,
+          status: "active",
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.platformConnections.id, fresh.id));
+      return next.accessToken;
+    });
   } catch (err) {
     await markConnectionError(connection.id, err);
     throw err;

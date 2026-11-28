@@ -63,6 +63,8 @@ const schema = z.object({
   CRON_SECRET: optional,
   /** Header your host sets with the real client IP and clients cannot forge (e.g. "x-real-ip" behind nginx). Default: last X-Forwarded-For hop. */
   TRUSTED_IP_HEADER: optional,
+  /** Comma-separated emails that become workspace owners when they sign up or sign in. */
+  OWNER_EMAIL: optional,
 });
 
 export type Env = z.infer<typeof schema>;

@@ -16,6 +16,7 @@ import { enqueueClip } from "../queue/queues";
 import { logger } from "../logger";
 import { renderSettingsSchema } from "../clipping/settings";
 import { aiEnrich, fallbackCopy, setJob } from "./clipping";
+import { assertOwned } from "./ownership";
 
 /**
  * Clip Studio for YouTube links.
@@ -102,6 +103,7 @@ function providerToApi(err: unknown): never {
 
 export async function createYouTubeClipJob(userId: string, raw: unknown) {
   const input = youtubeClipInputSchema.parse(raw);
+  await assertOwned(userId, { projects: [input.projectId] });
   const videoId = parseYouTubeId(input.url);
   if (!videoId) throw badRequest("That isn't a YouTube video link. Paste a link like https://www.youtube.com/watch?v=… or https://youtu.be/…");
 

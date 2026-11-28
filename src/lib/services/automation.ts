@@ -5,6 +5,7 @@ import type { WorkflowStep, WorkflowTrigger } from "../db/schema";
 import { enqueueAutomation, enqueueSync } from "../queue/queues";
 import { notify } from "./notifications";
 import { logger } from "../logger";
+import { meteredFor } from "../usage";
 
 export function nextCronRun(cron: string, timezone: string, from = new Date()): Date {
   return CronExpressionParser.parse(cron, { currentDate: from, tz: timezone }).next().toDate();
@@ -54,17 +55,37 @@ export async function dispatchScheduledWorkflows() {
     .from(schema.workflows)
     .where(and(eq(schema.workflows.enabled, true), sql`${schema.workflows.trigger}->>'type' = 'schedule'`, lte(schema.workflows.nextRunAt, new Date())));
   for (const wf of due) {
-    const trig = wf.trigger as Extract<WorkflowTrigger, { type: "schedule" }>;
-    const next = nextCronRun(trig.cron, trig.timezone);
-    // Advance next_run_at first (compare-and-set) so two workers never start the same run.
-    const claimed = await db
-      .update(schema.workflows)
-      .set({ nextRunAt: next, lastRunAt: new Date() })
-      .where(and(eq(schema.workflows.id, wf.id), eq(schema.workflows.nextRunAt, wf.nextRunAt!)))
-      .returning({ id: schema.workflows.id });
-    if (claimed.length) await startWorkflowRun(wf.userId, wf.id, "schedule");
+    // One broken workflow must not stop the others from running.
+    try {
+      const trig = wf.trigger as Extract<WorkflowTrigger, { type: "schedule" }>;
+      let next: Date | null;
+      try {
+        next = nextCronRun(trig.cron, trig.timezone);
+      } catch (err) {
+        next = null; // unparseable schedule: stop retrying it every minute and tell the owner
+        await db.update(schema.workflows).set({ nextRunAt: null }).where(eq(schema.workflows.id, wf.id));
+        await notify(wf.userId, { type: "error", title: `Automation "${wf.name}" has an invalid schedule`, body: `${(err as Error).message}. Edit the schedule to turn it back on.`, link: "/automation" });
+        continue;
+      }
+      // Advance next_run_at first (compare-and-set) so two workers never start the same run.
+      const claimed = await db
+        .update(schema.workflows)
+        .set({ nextRunAt: next, lastRunAt: new Date() })
+        .where(and(eq(schema.workflows.id, wf.id), eq(schema.workflows.nextRunAt, wf.nextRunAt!)))
+        .returning({ id: schema.workflows.id });
+      if (claimed.length) await startWorkflowRun(wf.userId, wf.id, "schedule");
+    } catch (err) {
+      logger.error("Scheduled workflow dispatch failed", { workflowId: wf.id, err: (err as Error).message });
+    }
   }
   return due.length;
+}
+
+/** IDs a workflow refers to, so routes can check they belong to the caller. */
+export function workflowRefs(b: { trigger?: WorkflowTrigger; steps?: WorkflowStep[] }) {
+  const agents = (b.steps ?? []).flatMap((s) => (s.type === "run_agent" ? [s.agentId] : []));
+  const watchlists = b.trigger?.type === "trend_alert" && b.trigger.watchlistId ? [b.trigger.watchlistId] : [];
+  return { agents, watchlists };
 }
 
 type StepRunner = (userId: string, step: WorkflowStep) => Promise<string>;
@@ -109,7 +130,7 @@ async function runStep(userId: string, step: WorkflowStep): Promise<string> {
   }
 }
 
-export async function executeWorkflowRun(runId: string) {
+async function executeWorkflowRunUnmetered(runId: string) {
   const db = serviceDb();
   const [run] = await db.update(schema.workflowRuns).set({ status: "running", startedAt: new Date() }).where(and(eq(schema.workflowRuns.id, runId), inArray(schema.workflowRuns.status, ["queued"]))).returning();
   if (!run) return null;
@@ -156,4 +177,8 @@ async function ensureRunnersRegistered() {
     const r = await runAgent(userId, s.agentId, s.input);
     return `Agent finished (${r.output?.length ?? 0} chars)`;
   });
+}
+
+export function executeWorkflowRun(runId: string) {
+  return meteredFor("workflow_runs", runId, () => executeWorkflowRunUnmetered(runId));
 }

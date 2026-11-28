@@ -18,7 +18,11 @@
     "fixtures:fetch": "tsx scripts/fetch-test-videos.ts",
     "test:e2e:clips": "node tests/e2e/clips.mjs",
     "test:e2e:youtube": "node tests/e2e/youtube.mjs",
-    "test:e2e:media": "node tests/e2e/media.mjs"
+    "test:e2e:media": "node tests/e2e/media.mjs",
+    "make-owner": "tsx scripts/make-owner.ts",
+    "test:e2e:admin": "node tests/e2e/admin.mjs",
+    "test:e2e:fuzz": "node tests/e2e/api-fuzz.mjs",
+    "test:e2e:crawl": "node tests/e2e/crawl.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.12.0",

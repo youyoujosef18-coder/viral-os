@@ -19,6 +19,8 @@ export class ProviderError extends Error {
   }
 }
 
+import { recordUsage, youtubeCost } from "../usage";
+
 export type FetchLike = typeof fetch;
 let fetchImpl: FetchLike = (...args) => fetch(...args);
 
@@ -32,7 +34,11 @@ export async function http(url: string, init: RequestInit & { timeoutMs?: number
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchImpl(url, { ...rest, signal: controller.signal });
+    const res = await fetchImpl(url, { ...rest, signal: controller.signal });
+    // Meter YouTube Data API quota per user (Google charges a call whatever its outcome).
+    const cost = youtubeCost(url, rest.method ?? "GET");
+    if (cost) await recordUsage("youtube_units", cost.units, { detail: { bucket: cost.bucket, path: new URL(url).pathname } });
+    return res;
   } catch (err) {
     throw new ProviderError(`Network error calling ${new URL(url).host}: ${(err as Error).message}`, { retryable: true });
   } finally {

@@ -4,6 +4,7 @@ import { schema, withUser } from "../db/client";
 import type { ScriptContent } from "../db/schema";
 import { generatePlain, generateStructured } from "../providers/ai";
 import { notFound } from "../api/errors";
+import { assertOwned } from "./ownership";
 
 export const scriptControlsSchema = z.object({
   topic: z.string().trim().min(3).max(500),
@@ -62,6 +63,7 @@ Provide 5 title options, 8-15 hashtags without '#', and 3 repurposing ideas.`;
 
 export async function generateScript(userId: string, raw: unknown) {
   const controls = scriptControlsSchema.parse(raw);
+  await assertOwned(userId, { projects: [controls.projectId] }); // before spending an AI call
   const { data, provider, model } = await generateStructured(scriptContentSchema, { system: SYSTEM, prompt: brief(controls), shapeHint: SHAPE, maxTokens: 6000 });
   const [row] = await withUser(userId, (tx) =>
     tx.insert(schema.scripts).values({ userId, projectId: controls.projectId ?? null, title: data.titleOptions[0] ?? controls.topic, platform: controls.platform, controls, content: data, generatedBy: `${provider}/${model}` }).returning(),

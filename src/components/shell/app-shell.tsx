@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import {
   Bell, Plus, Search, Upload, Menu as MenuIcon, X, LogOut, User, History, HelpCircle, Sparkles, Loader2, CheckCheck, Clapperboard, PenLine, Send, Microscope, Workflow,
 } from "lucide-react";
-import { NAV, ALL_NAV } from "@/lib/client/nav";
+import { NAV, ALL_NAV, OWNER_NAV } from "@/lib/client/nav";
 import { cn, fmtRelative } from "@/lib/client/utils";
 import { api, errorText } from "@/lib/client/api";
 import { useConnections, useMe } from "@/lib/client/hooks";
@@ -38,10 +38,12 @@ function Brand() {
 
 function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
+  const { data: me } = useMe();
+  const groups = me?.role === "owner" ? [...NAV, { group: "Owner", items: [OWNER_NAV] }] : NAV;
   return (
     <nav aria-label="Main" className="flex h-full flex-col gap-5 overflow-y-auto px-3 pb-6 pt-4">
       <Brand />
-      {NAV.map((g) => (
+      {groups.map((g) => (
         <div key={g.group || "home"}>
           {g.group && <p className="mb-1 px-2.5 text-[12px] font-medium text-faint">{g.group}</p>}
           <ul className="space-y-0.5">

@@ -9,6 +9,7 @@ import { schema, withUser } from "../db/client";
 import { storage } from "../storage";
 import { generateStructured } from "../providers/ai";
 import { ApiError, notFound } from "../api/errors";
+import { assertOwned } from "./ownership";
 
 const run = promisify(execFile);
 const FFMPEG = process.env.FFMPEG_PATH || "ffmpeg";
@@ -116,6 +117,7 @@ export const analyzerInputSchema = z.object({
 
 export async function analyzeVideo(userId: string, raw: unknown) {
   const input = analyzerInputSchema.parse(raw);
+  await assertOwned(userId, { projects: [input.projectId] });
   if (!input.assetId && !input.transcript.trim() && !input.title.trim()) throw new ApiError(400, "Provide a video file, a transcript, or at least a title to analyze.", "bad_request");
   let technical: Awaited<ReturnType<typeof technicalAnalysis>> | null = null;
   if (input.assetId) {

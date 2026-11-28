@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/
 import { toast } from "sonner";
 import { api, errorText } from "./api";
 
-export type Profile = { id: string; email: string; displayName: string | null; timezone: string; niche: string | null; defaultLanguage: string; dashboardLayout: string[] | null; preferences: Record<string, unknown> };
+export type Profile = { id: string; email: string; displayName: string | null; timezone: string; niche: string | null; defaultLanguage: string; dashboardLayout: string[] | null; preferences: Record<string, unknown>; role?: string };
 export type Connection = { id: string; platform: string; accountName: string | null; accountHandle: string | null; avatarUrl: string | null; status: string; lastSyncedAt: string | null; lastError: string | null; tokenExpiresAt: string | null; scopes: string[] };
 export type MediaAsset = { id: string; kind: "video" | "image" | "audio" | "document"; filename: string; mimeType: string; sizeBytes: number; width: number | null; height: number | null; folder: string; tags: string[]; createdAt: string };
 

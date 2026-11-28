@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { signIn } from "@/lib/auth/session";
-import { errorResponse } from "@/lib/api/handler";
+import { errorResponse, readJson } from "@/lib/api/handler";
 import { rateLimit } from "@/lib/api/rate-limit";
 import { ApiError } from "@/lib/api/errors";
 import { clientIp } from "@/lib/http-utils";
@@ -11,7 +11,7 @@ const schema = z.object({ email: z.string().trim().email(), password: z.string()
 
 export async function POST(req: NextRequest) {
   try {
-    const body = schema.parse(await req.json());
+    const body = schema.parse(await readJson(req));
     const ip = clientIp(req.headers, env().TRUSTED_IP_HEADER);
     const email = body.email.toLowerCase();
     // Per address+email, plus a per-email cap that no IP rotation can get around.
